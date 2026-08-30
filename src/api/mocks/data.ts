@@ -1,0 +1,372 @@
+import type {
+  DayCase,
+  ItineraryDayDTO,
+  ItineraryItemDTO,
+  PlaceDTO,
+  Quadrant,
+  SlotType,
+  TripRequestPayload,
+  TripResponse,
+} from "../types";
+
+// Small seed pool standing in for the real Place table until the backend
+// exposes /api/places. Enough variety to demo region + purpose matching.
+interface SeedPlace extends PlaceDTO {
+  purposes: string[];
+  stayMin: number;
+}
+
+const SEED_PLACES: SeedPlace[] = [
+  {
+    content_id: "P001",
+    title: "성산일출봉 일출",
+    address: "서귀포시 성산읍 성산리",
+    longitude: 126.9425,
+    latitude: 33.4587,
+    overview: "어스름 속 응회구 정상 계단을 올라, 수평선 위로 해가 떠오르는 순간을 마주합니다.",
+    content_type_name: "관광지",
+    small_category_name: "자연관광지",
+    quadrant: "SE",
+    satisfaction_score: 4.54,
+    purposes: ["nature", "photo"],
+    stayMin: 60,
+  },
+  {
+    content_id: "P002",
+    title: "섭지코지",
+    address: "서귀포시 성산읍 섭지코지로",
+    longitude: 126.9275,
+    latitude: 33.4238,
+    overview: "아침 햇살 아래 등대와 유채꽃 벌판을 걷는 해안 산책로.",
+    content_type_name: "관광지",
+    small_category_name: "자연관광지",
+    quadrant: "SE",
+    satisfaction_score: 4.4,
+    purposes: ["nature", "photo"],
+    stayMin: 60,
+  },
+  {
+    content_id: "P003",
+    title: "광치기 해변 맛집",
+    address: "서귀포시 성산읍 고성리",
+    longitude: 126.9139,
+    latitude: 33.4381,
+    overview: "썰물 때 드러나는 넓은 여(암반) 지대를 걸으며 근처 식당에서 여유롭게 점심.",
+    content_type_name: "음식점",
+    small_category_name: "해산물요리",
+    quadrant: "SE",
+    satisfaction_score: 4.3,
+    purposes: ["food"],
+    stayMin: 80,
+  },
+  {
+    content_id: "P004",
+    title: "표선해수욕장",
+    address: "서귀포시 표선면 표선리",
+    longitude: 126.8367,
+    latitude: 33.3253,
+    overview: "넓은 백사장과 얕은 수심이 특징인 해변.",
+    content_type_name: "관광지",
+    small_category_name: "해수욕장",
+    quadrant: "SE",
+    satisfaction_score: 4.56,
+    purposes: ["nature", "activity"],
+    stayMin: 60,
+  },
+  {
+    content_id: "P005",
+    title: "서귀포 매일 올레시장 노을",
+    address: "서귀포시 중앙로",
+    longitude: 126.5608,
+    latitude: 33.2515,
+    overview: "해질녘 붉은 빛 아래, 갓 튀긴 오메기떡과 회국수 노점이 불을 켜는 시장 골목.",
+    content_type_name: "쇼핑",
+    small_category_name: "전통시장",
+    quadrant: "SW",
+    satisfaction_score: 4.45,
+    purposes: ["food", "shopping"],
+    stayMin: 90,
+  },
+  {
+    content_id: "P006",
+    title: "협재해수욕장",
+    address: "제주시 한림읍 협재리",
+    longitude: 126.2394,
+    latitude: 33.3941,
+    overview: "에메랄드빛 바다와 백사장, 비양도가 보이는 서쪽 대표 해변.",
+    content_type_name: "관광지",
+    small_category_name: "해수욕장",
+    quadrant: "NW",
+    satisfaction_score: 4.5,
+    purposes: ["nature", "photo"],
+    stayMin: 70,
+  },
+  {
+    content_id: "P007",
+    title: "애월 카페거리",
+    address: "제주시 애월읍 애월로",
+    longitude: 126.3266,
+    latitude: 33.4626,
+    overview: "해안도로를 따라 늘어선 감성 카페와 미디어아트 전시.",
+    content_type_name: "음식점",
+    small_category_name: "카페",
+    quadrant: "NW",
+    satisfaction_score: 4.35,
+    purposes: ["food", "photo"],
+    stayMin: 60,
+  },
+  {
+    content_id: "P008",
+    title: "동문재래시장 야시장",
+    address: "제주시 관덕로",
+    longitude: 126.5219,
+    latitude: 33.5136,
+    overview: "밤이면 불을 밝히는 야시장 골목, 흑돼지 꼬치와 오메기떡.",
+    content_type_name: "쇼핑",
+    small_category_name: "전통시장",
+    quadrant: "NE",
+    satisfaction_score: 4.4,
+    purposes: ["food", "shopping"],
+    stayMin: 90,
+  },
+  {
+    content_id: "P009",
+    title: "월정리해수욕장",
+    address: "제주시 구좌읍 월정리",
+    longitude: 126.7961,
+    latitude: 33.5563,
+    overview: "새하얀 모래와 코발트빛 바다, 해안가 카페 산책로.",
+    content_type_name: "관광지",
+    small_category_name: "해수욕장",
+    quadrant: "NE",
+    satisfaction_score: 4.48,
+    purposes: ["nature", "photo", "activity"],
+    stayMin: 60,
+  },
+  {
+    content_id: "P010",
+    title: "용머리해안",
+    address: "서귀포시 안덕면 사계리",
+    longitude: 126.3103,
+    latitude: 33.2306,
+    overview: "파도가 깎아낸 기암절벽 해안 산책로, 노을 명소.",
+    content_type_name: "관광지",
+    small_category_name: "자연관광지",
+    quadrant: "SW",
+    satisfaction_score: 4.42,
+    purposes: ["nature", "culture", "photo"],
+    stayMin: 60,
+  },
+];
+
+const QUADRANT_BY_REGION: Record<string, Quadrant | undefined> = {
+  제주시동부: "NE",
+  제주시서부: "NW",
+  제주시내: "NW",
+  서귀포동부: "SE",
+  서귀포서부: "SW",
+  전역: undefined,
+};
+
+function isoAt(baseDate: Date, minutesFromMidnight: number): string {
+  const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+  d.setMinutes(minutesFromMidnight);
+  return d.toISOString();
+}
+
+function slotTypeFor(place: SeedPlace, needLunch: boolean, needDinner: boolean, filledLunch: boolean): SlotType {
+  if (place.content_type_name === "음식점") {
+    if (needLunch && !filledLunch) return "RESTAURANT";
+    if (needDinner) return "RESTAURANT";
+    return "CAFE";
+  }
+  return "GENERAL";
+}
+
+function buildDay(
+  dayIndex: number,
+  dayCase: DayCase,
+  dayDate: Date,
+  payload: TripRequestPayload,
+  excludeIds: Set<string>,
+): ItineraryDayDTO {
+  const quadrant = payload.region_preference ? QUADRANT_BY_REGION[payload.region_preference] : undefined;
+  const purposes = [payload.purpose_main, payload.purpose_sub].filter(Boolean) as string[];
+
+  const bySort = (a: SeedPlace, b: SeedPlace) => {
+    const aScore = a.purposes.some((pp) => purposes.includes(pp)) ? 1 : 0;
+    const bScore = b.purposes.some((pp) => purposes.includes(pp)) ? 1 : 0;
+    return bScore - aScore;
+  };
+
+  const remaining = SEED_PLACES.filter((p) => !excludeIds.has(p.content_id));
+  const inQuadrant = remaining.filter((p) => !quadrant || p.quadrant === quadrant).sort(bySort);
+  // The demo seed pool is tiny — once a region runs out of fresh candidates for a
+  // later day, widen the search instead of leaving the day empty.
+  const pool = inQuadrant.length >= 2 ? inQuadrant : remaining.sort(bySort);
+
+  const availHours = dayCase === "D" ? 8 : dayCase === "B" ? 12 : 6.5;
+  const targetSlots = Math.max(0, Math.min(pool.length, Math.round(availHours)));
+  const needLunch = dayCase !== "A";
+  const needDinner = true;
+
+  const chosen = pool.slice(0, targetSlots);
+  let cursor = dayCase === "A" ? 15 * 60 : 9 * 60; // minutes from midnight
+  let filledLunch = false;
+
+  const items: ItineraryItemDTO[] = chosen.map((place, idx) => {
+    const travel = idx === 0 ? 0 : 15 + (idx % 3) * 5;
+    cursor += travel;
+    const arrive = cursor;
+    cursor += place.stayMin;
+    const depart = cursor;
+    const slotType = slotTypeFor(place, needLunch, needDinner, filledLunch);
+    if (slotType === "RESTAURANT" && !filledLunch) filledLunch = true;
+    excludeIds.add(place.content_id);
+
+    const { purposes: _p, stayMin: _s, ...placeDto } = place;
+    return {
+      order: idx,
+      slot_type: slotType,
+      place: placeDto,
+      arrive_at: isoAt(dayDate, arrive),
+      depart_at: isoAt(dayDate, depart),
+      stay_min: place.stayMin,
+      travel_min_from_prev: idx === 0 ? null : travel,
+      hours_uncertain: false,
+      pref_score: 0.7,
+      adjusted_qual: (place.satisfaction_score ?? 4.0) / 5,
+    };
+  });
+
+  return {
+    day_index: dayIndex,
+    day_case: dayCase,
+    avail_hours: availHours,
+    target_slots: targetSlots,
+    need_lunch: needLunch,
+    need_dinner: needDinner,
+    need_night_spot: false,
+    lodging: null,
+    items,
+  };
+}
+
+function dayCaseFor(index: number, total: number): DayCase {
+  if (total === 1) return "D";
+  if (index === 1) return "A";
+  if (index === total) return "C";
+  return "B";
+}
+
+let counter = 0;
+export function nextTripId(): string {
+  counter += 1;
+  return `trip-${Date.now().toString(36)}-${counter}`;
+}
+
+export function generateTrip(payload: TripRequestPayload): TripResponse {
+  const start = new Date(payload.start_datetime);
+  const end = new Date(payload.end_datetime);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const totalDays = Math.max(
+    1,
+    Math.round((new Date(end.toDateString()).getTime() - new Date(start.toDateString()).getTime()) / msPerDay) + 1,
+  );
+
+  const excludeIds = new Set<string>();
+  const days: ItineraryDayDTO[] = [];
+  for (let i = 1; i <= totalDays; i += 1) {
+    const dayCase = dayCaseFor(i, totalDays);
+    const dayDate = new Date(start.getFullYear(), start.getMonth(), start.getDate() + (i - 1));
+    days.push(buildDay(i, dayCase, dayDate, payload, excludeIds));
+  }
+
+  return {
+    id: nextTripId(),
+    created_at: new Date().toISOString(),
+    request: payload,
+    total_days: totalDays,
+    days,
+  };
+}
+
+// Fixed demo trip used by Home/List curated cards so they always show a
+// fully authored example (ported 1:1 from the original static prototype).
+export const DEMO_TRIP_ID = "demo-seongsan";
+
+export const DEMO_TRIP: TripResponse = {
+  id: DEMO_TRIP_ID,
+  created_at: new Date().toISOString(),
+  total_days: 1,
+  request: {
+    start_datetime: "2026-09-12T06:00:00+09:00",
+    end_datetime: "2026-09-12T19:00:00+09:00",
+    return_to_departure: false,
+    transport_mode: "rental_car",
+    companion_type: "couple",
+    purpose_main: "nature",
+    purpose_sub: "photo",
+    course_priority: "pref",
+    region_preference: "서귀포동부",
+  },
+  days: [
+    {
+      day_index: 1,
+      day_case: "D",
+      avail_hours: 12,
+      target_slots: 5,
+      need_lunch: true,
+      need_dinner: false,
+      need_night_spot: false,
+      lodging: null,
+      items: [
+        {
+          order: 0,
+          slot_type: "GENERAL",
+          place: SEED_PLACES[0],
+          arrive_at: "2026-09-12T06:00:00+09:00",
+          depart_at: "2026-09-12T07:00:00+09:00",
+          stay_min: 60,
+          travel_min_from_prev: null,
+        },
+        {
+          order: 1,
+          slot_type: "GENERAL",
+          place: SEED_PLACES[1],
+          arrive_at: "2026-09-12T09:00:00+09:00",
+          depart_at: "2026-09-12T10:00:00+09:00",
+          stay_min: 60,
+          travel_min_from_prev: 8,
+        },
+        {
+          order: 2,
+          slot_type: "RESTAURANT",
+          place: SEED_PLACES[2],
+          arrive_at: "2026-09-12T12:00:00+09:00",
+          depart_at: "2026-09-12T13:20:00+09:00",
+          stay_min: 80,
+          travel_min_from_prev: 6,
+        },
+        {
+          order: 3,
+          slot_type: "GENERAL",
+          place: SEED_PLACES[3],
+          arrive_at: "2026-09-12T15:00:00+09:00",
+          depart_at: "2026-09-12T16:00:00+09:00",
+          stay_min: 60,
+          travel_min_from_prev: 18,
+        },
+        {
+          order: 4,
+          slot_type: "SNACK",
+          place: SEED_PLACES[4],
+          arrive_at: "2026-09-12T18:00:00+09:00",
+          depart_at: "2026-09-12T19:30:00+09:00",
+          stay_min: 90,
+          travel_min_from_prev: 35,
+        },
+      ],
+    },
+  ],
+};
