@@ -20,7 +20,7 @@ npm run dev
 2. `VITE_API_BASE_URL`에 실제 서버 주소 입력 (예: `https://api.siganyeohaeng.com`)
 3. `VITE_USE_MOCKS=false`로 변경
 
-API 요청/응답 스키마는 레포 루트의 [`API_CONTRACT.md`](../API_CONTRACT.md)를 참고하세요. 프론트가 기대하는
+API 요청/응답 스키마는 [`API_CONTRACT.md`](./API_CONTRACT.md)를 참고하세요. 프론트가 기대하는
 형태를 먼저 정의해둔 문서이며, 백엔드 구현 시 이 문서를 기준으로 맞추거나 협의가 필요한 부분을 알려주시면 됩니다.
 
 ## 화면 구성
@@ -28,7 +28,7 @@ API 요청/응답 스키마는 레포 루트의 [`API_CONTRACT.md`](../API_CONTR
 | 경로 | 설명 |
 |---|---|
 | `/` | 홈 — 시간대 다이얼, 추천 코스 큐레이션 |
-| `/list` | 추천 코스 전체 목록 (정적 목업 — 백엔드에 "공개 코스" 모델이 아직 없어 이번 범위에서는 연동하지 않음, `API_CONTRACT.md` 3번 참고) |
+| `/list` | 추천 코스 전체 목록 (정적 목업 — 백엔드에 "공개 코스" 모델이 아직 없어 이번 범위에서는 연동하지 않음, [`API_CONTRACT.md`](./API_CONTRACT.md) 3번 참고) |
 | `/builder` | 코스 만들기 — `TripRequest`의 모든 입력값을 받는 폼 |
 | `/trip/:id` | 코스 상세 — `GET /api/trips/:id`로 조회한 일정을 타임라인으로 표시 |
 
