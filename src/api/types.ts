@@ -104,6 +104,7 @@ export interface TripRequestPayload {
   start_datetime: string;
   end_datetime: string;
   departure_place_id?: string;
+  arrival_place_id?: string;
   return_to_departure: boolean;
 
   transport_mode: TransportMode;
@@ -112,6 +113,7 @@ export interface TripRequestPayload {
   purpose_sub?: PurposeKey;
   course_priority: CoursePriority;
   region_preference?: RegionKey;
+  day_overrides?: DayOverridePayload[];
 
   mood_tags?: string[];
   include_places?: string[];
@@ -162,6 +164,7 @@ export interface ItineraryItemDTO {
   hours_uncertain?: boolean;
   pref_score?: number | null;
   adjusted_qual?: number | null;
+  locked?: boolean;
 }
 
 export type DayCase = "A" | "B" | "C" | "D";
@@ -188,4 +191,175 @@ export interface TripResponse {
 
 export interface FieldErrors {
   field_errors?: Record<string, string[]>;
+}
+
+// ── Auth (mock — backend has no auth app yet) ──────────────────────────────
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export interface AuthSession {
+  user: User;
+  token: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface SignupPayload {
+  email: string;
+  password: string;
+  name: string;
+}
+
+// ── Day overrides (multi-day trips) ────────────────────────────────────────
+
+export interface DayOverridePayload {
+  day_index: number;
+  purpose_main?: PurposeKey;
+  course_priority?: CoursePriority;
+  region_preference?: RegionKey;
+  lodging_arrival_time?: string; // "HH:MM", last day excluded
+}
+
+// ── Course candidates (recommendation list before a trip is persisted) ────
+
+export interface CandidateScores {
+  move_eff: number; // 1~5
+  pref_fit: number; // 1~5
+  slack: number; // 1~5
+}
+
+export interface TripCandidateDTO {
+  id: string;
+  mode: CoursePriority;
+  label: string;
+  visit_count: number;
+  total_duration_min: number;
+  total_distance_km: number;
+  slack_min: number;
+  scores: CandidateScores;
+  description: string;
+  badges: string[];
+  days: ItineraryDayDTO[];
+}
+
+export interface CandidatesResponse {
+  request_id: string;
+  candidates: TripCandidateDTO[];
+}
+
+// ── Lodging ─────────────────────────────────────────────────────────────
+
+export interface LodgingDTO {
+  content_id: string;
+  title: string;
+  address: string;
+  longitude: number;
+  latitude: number;
+  small_category_name: LodgingType;
+  parking: boolean;
+  cooking: boolean;
+  facilities: string[];
+  price_per_night?: number | null;
+  check_in_time?: string;
+  check_out_time?: string;
+}
+
+export interface LodgingRecommendationDTO {
+  lodging: LodgingDTO;
+  travel_min_from_last_stop: number;
+  match_reason: string;
+  missing_fields: string[];
+  booking_url?: string;
+}
+
+// ── Course editing ──────────────────────────────────────────────────────
+
+export type EditOpType = "reorder" | "swap" | "remove" | "add" | "lock" | "stay_time";
+
+export interface EditRequestPayload {
+  trip: TripResponse; // current client-side draft snapshot — the edit endpoint is a pure
+                       // function over this, it does not touch server-persisted state.
+  day_index: number;
+  op: EditOpType;
+  item_order?: number; // target item's current order (reorder/remove/lock/stay_time/swap-from)
+  direction?: "up" | "down"; // reorder
+  stay_min?: number; // stay_time
+}
+
+export interface ConstraintViolationDTO {
+  type: "hours_exceeded" | "schedule_overrun" | "travel_time_insufficient";
+  place_title?: string;
+  detail: string;
+}
+
+export interface EditResponse {
+  trip: TripResponse;
+  violations: ConstraintViolationDTO[];
+}
+
+// ── Chatbot ─────────────────────────────────────────────────────────────
+
+export type QuickFixCode =
+  | "lock_place"
+  | "swap_place"
+  | "add_place"
+  | "exclude_category"
+  | "indoor_focus"
+  | "outdoor_focus"
+  | "walk_light"
+  | "add_slack";
+
+export interface StructuredIntentDTO {
+  type: QuickFixCode | "unrecognized";
+  summary: string;
+}
+
+export interface ChatMessageDTO {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  created_at: string;
+  structured_intent?: StructuredIntentDTO;
+}
+
+export interface ChatRequestPayload {
+  day_index: number;
+  message?: string;
+  quick_fix?: QuickFixCode;
+}
+
+export interface ChatResponse {
+  messages: ChatMessageDTO[];
+  trip: TripResponse | null;
+  violations: ConstraintViolationDTO[];
+}
+
+// ── Save / manage ───────────────────────────────────────────────────────
+
+export interface SavedPlaceDTO {
+  id: string;
+  place: PlaceDTO;
+  saved_at: string;
+}
+
+export interface SavedCourseDTO {
+  id: string;
+  title: string;
+  trip: TripResponse;
+  saved_at: string;
+}
+
+// ── Place search ────────────────────────────────────────────────────────
+
+export interface PlaceSearchParams {
+  q?: string;
+  category?: string;
+  region?: RegionKey;
 }

@@ -1,9 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ChipGroup from "../components/ChipGroup";
 import TagInput from "../components/TagInput";
 import BuilderDial from "../components/BuilderDial";
-import { useCreateTrip } from "../hooks/useCreateTrip";
+import PlaceQuickPicker from "../components/PlaceQuickPicker";
+import DayOverrideSheet from "../components/DayOverrideSheet";
+import { useCreateCandidates } from "../hooks/useCandidates";
+import LoadingChecklist from "../components/LoadingChecklist";
+import { useAuth } from "../auth/AuthContext";
 import {
   COMPANION_LABELS,
   FOOD_PREF_LABELS,
@@ -13,6 +17,7 @@ import {
   TRANSPORT_LABELS,
   type CompanionType,
   type CoursePriority,
+  type DayOverridePayload,
   type FoodCafeBalance,
   type FoodPrefKey,
   type FoodRestriction,
@@ -23,6 +28,8 @@ import {
   type TransportMode,
   type TripRequestPayload,
 } from "../api/types";
+
+const PENDING_TRIP_KEY = "tj_pending_trip";
 
 function toOptions<T extends string>(labels: Record<T, string>) {
   return (Object.entries(labels) as [T, string][]).map(([value, label]) => ({ value, label }));
@@ -126,7 +133,8 @@ function fmtHour(h: number): string {
 
 export default function BuilderPage() {
   const navigate = useNavigate();
-  const createTrip = useCreateTrip();
+  const createCandidates = useCreateCandidates();
+  const { isAuthenticated } = useAuth();
 
   // Step 1 — dates & hours
   const [startDate, setStartDate] = useState(defaultStartDate());
@@ -135,8 +143,13 @@ export default function BuilderPage() {
   const [endHour, setEndHour] = useState(18);
 
   // Step 2 — departure & return
-  const [departurePlaceId, setDeparturePlaceId] = useState("");
-  const [returnToDeparture, setReturnToDeparture] = useState(false);
+  const [departurePlaceId, setDeparturePlaceId] = useState("제주국제공항");
+  const [arrivalPlaceId, setArrivalPlaceId] = useState("제주국제공항");
+  const [returnToDeparture, setReturnToDeparture] = useState(true);
+
+  // 일자별 조건 개별 설정
+  const [dayOverrides, setDayOverrides] = useState<DayOverridePayload[]>([]);
+  const [showDayOverrides, setShowDayOverrides] = useState(false);
 
   // Step 3-7 — hard constraints
   const [transportMode, setTransportMode] = useState<TransportMode | "">("rental_car");
@@ -170,6 +183,12 @@ export default function BuilderPage() {
 
   const endDate = useMemo(() => addDays(startDate, nights), [startDate, nights]);
   const isMultiDay = nights > 0;
+  const totalDays = nights + 1;
+
+  // Drop per-day overrides for days that no longer exist once the trip is shortened.
+  useEffect(() => {
+    setDayOverrides((prev) => prev.filter((o) => o.day_index <= totalDays));
+  }, [totalDays]);
   const showFoodBalance = purposeMain === "food" || purposeSub === "food";
 
   const dayTripInvalid = nights === 0 && endHour <= startHour;
@@ -182,6 +201,7 @@ export default function BuilderPage() {
       start_datetime: `${startDate}T${fmtHour(startHour)}:00`,
       end_datetime: `${endDate}T${fmtHour(endHour === 24 ? 0 : endHour)}:00`,
       departure_place_id: departurePlaceId || undefined,
+      arrival_place_id: (returnToDeparture ? departurePlaceId : arrivalPlaceId) || undefined,
       return_to_departure: returnToDeparture,
       transport_mode: transportMode as TransportMode,
       companion_type: companionType as CompanionType,
@@ -189,6 +209,7 @@ export default function BuilderPage() {
       purpose_sub: purposeSub || undefined,
       course_priority: coursePriority as CoursePriority,
       region_preference: region || undefined,
+      day_overrides: isMultiDay && dayOverrides.length ? dayOverrides.filter((o) => o.day_index <= totalDays) : undefined,
       mood_tags: moodTags,
       include_places: includePlaces,
       exclude_places: excludePlaces,
@@ -210,9 +231,39 @@ export default function BuilderPage() {
 
   function handleSubmit() {
     if (missingRequired) return;
-    createTrip.mutate(buildPayload(), {
-      onSuccess: (trip) => navigate(`/trip/${trip.id}`),
+    const payload = buildPayload();
+
+    if (!isAuthenticated) {
+      sessionStorage.setItem(PENDING_TRIP_KEY, JSON.stringify(payload));
+      navigate("/login", { state: { from: "/builder" } });
+      return;
+    }
+
+    createCandidates.mutate(payload, {
+      onSuccess: (res) => navigate(`/trips/candidates/${res.request_id}`),
     });
+  }
+
+  // If the user got redirected to /login mid-submit, resume automatically
+  // once they're back here and authenticated.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const raw = sessionStorage.getItem(PENDING_TRIP_KEY);
+    if (!raw) return;
+    sessionStorage.removeItem(PENDING_TRIP_KEY);
+    try {
+      const payload = JSON.parse(raw) as TripRequestPayload;
+      createCandidates.mutate(payload, {
+        onSuccess: (res) => navigate(`/trips/candidates/${res.request_id}`),
+      });
+    } catch {
+      // ignore malformed pending payload
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
+  if (createCandidates.isPending) {
+    return <LoadingChecklist />;
   }
 
   return (
@@ -315,25 +366,26 @@ export default function BuilderPage() {
           <div className="step">
             <div className="step-head">
               <div className="step-num mono">2</div>
-              <div className="step-title">출발지와 복귀 방식</div>
+              <div className="step-title">출발지와 도착지</div>
             </div>
-            <div className="step-sub">출발지(공항 등)는 선택 입력이에요. 비워두면 기본값으로 처리돼요.</div>
+            <div className="step-sub">빠른 선택 또는 검색으로 지정하세요. 비워두면 제주국제공항을 기본값으로 써요.</div>
             <div className="field-row">
-              <label>출발지 (선택)</label>
-              <input
-                type="text"
-                placeholder="예: 제주국제공항"
-                value={departurePlaceId}
-                onChange={(e) => setDeparturePlaceId(e.target.value)}
-              />
+              <label>출발지</label>
+              <PlaceQuickPicker value={departurePlaceId} onChange={setDeparturePlaceId} />
             </div>
             <div className="toggle-row">
               <div
                 className={`toggle-switch${returnToDeparture ? " on" : ""}`}
                 onClick={() => setReturnToDeparture((v) => !v)}
               />
-              마지막 장소에서 출발지로 다시 복귀
+              도착지를 출발지와 동일하게
             </div>
+            {!returnToDeparture && (
+              <div className="field-row">
+                <label>도착지</label>
+                <PlaceQuickPicker value={arrivalPlaceId} onChange={setArrivalPlaceId} />
+              </div>
+            )}
           </div>
 
           <div className="step">
@@ -510,13 +562,41 @@ export default function BuilderPage() {
             </div>
           )}
 
-          <button className="cta-final" onClick={handleSubmit} disabled={missingRequired || createTrip.isPending}>
-            {createTrip.isPending ? "코스를 만드는 중…" : "이 조건으로 코스 매칭받기 →"}
+          {isMultiDay && (
+            <div className="step">
+              <button type="button" className="btn-outline" onClick={() => setShowDayOverrides(true)}>
+                일자별 조건 개별 설정{dayOverrides.length > 0 ? ` (${dayOverrides.length}일 맞춤)` : ""}
+              </button>
+              <p className="step-sub" style={{ marginTop: 10 }}>
+                설정하지 않으면 위에서 고른 목적·우선순위·권역이 모든 날짜에 똑같이 적용돼요.
+              </p>
+            </div>
+          )}
+
+          <button className="cta-final" onClick={handleSubmit} disabled={missingRequired || createCandidates.isPending}>
+            이 조건으로 코스 매칭받기 →
           </button>
-          {createTrip.isError && (
+          {createCandidates.isError && (
             <div className="form-error">코스를 만드는 중 문제가 발생했어요. 조건을 확인하고 다시 시도해주세요.</div>
           )}
+          {!isAuthenticated && (
+            <p className="auth-hint" style={{ marginTop: 10 }}>
+              추천을 받으려면 로그인이 필요해요. 지금 조건은 그대로 저장했다가 로그인 후 이어서 진행할게요.
+            </p>
+          )}
         </div>
+
+        {showDayOverrides && (
+          <DayOverrideSheet
+            totalDays={totalDays}
+            commonPurpose={purposeMain}
+            commonPriority={coursePriority}
+            commonRegion={region}
+            overrides={dayOverrides}
+            onChange={setDayOverrides}
+            onClose={() => setShowDayOverrides(false)}
+          />
+        )}
 
         <aside className="preview">
           <div className="preview-card">

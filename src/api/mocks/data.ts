@@ -1,10 +1,15 @@
 import type {
+  CandidateScores,
+  CandidatesResponse,
+  CoursePriority,
   DayCase,
   ItineraryDayDTO,
   ItineraryItemDTO,
   PlaceDTO,
+  PlaceSearchParams,
   Quadrant,
   SlotType,
+  TripCandidateDTO,
   TripRequestPayload,
   TripResponse,
 } from "../types";
@@ -14,6 +19,7 @@ import type {
 interface SeedPlace extends PlaceDTO {
   purposes: string[];
   stayMin: number;
+  category?: string; // matches Builder's exclude-category chip values
 }
 
 const SEED_PLACES: SeedPlace[] = [
@@ -86,6 +92,7 @@ const SEED_PLACES: SeedPlace[] = [
     satisfaction_score: 4.45,
     purposes: ["food", "shopping"],
     stayMin: 90,
+    category: "쇼핑",
   },
   {
     content_id: "P006",
@@ -128,6 +135,7 @@ const SEED_PLACES: SeedPlace[] = [
     satisfaction_score: 4.4,
     purposes: ["food", "shopping"],
     stayMin: 90,
+    category: "쇼핑",
   },
   {
     content_id: "P009",
@@ -142,6 +150,7 @@ const SEED_PLACES: SeedPlace[] = [
     satisfaction_score: 4.48,
     purposes: ["nature", "photo", "activity"],
     stayMin: 60,
+    category: "액티비티",
   },
   {
     content_id: "P010",
@@ -156,6 +165,7 @@ const SEED_PLACES: SeedPlace[] = [
     satisfaction_score: 4.42,
     purposes: ["nature", "culture", "photo"],
     stayMin: 60,
+    category: "체험",
   },
 ];
 
@@ -183,6 +193,15 @@ function slotTypeFor(place: SeedPlace, needLunch: boolean, needDinner: boolean, 
   return "GENERAL";
 }
 
+function resolveDayConditions(payload: TripRequestPayload, dayIndex: number) {
+  const override = payload.day_overrides?.find((o) => o.day_index === dayIndex);
+  return {
+    purposeMain: override?.purpose_main ?? payload.purpose_main,
+    purposeSub: payload.purpose_sub,
+    region: override?.region_preference ?? payload.region_preference,
+  };
+}
+
 function buildDay(
   dayIndex: number,
   dayCase: DayCase,
@@ -190,8 +209,9 @@ function buildDay(
   payload: TripRequestPayload,
   excludeIds: Set<string>,
 ): ItineraryDayDTO {
-  const quadrant = payload.region_preference ? QUADRANT_BY_REGION[payload.region_preference] : undefined;
-  const purposes = [payload.purpose_main, payload.purpose_sub].filter(Boolean) as string[];
+  const { purposeMain, purposeSub, region } = resolveDayConditions(payload, dayIndex);
+  const quadrant = region ? QUADRANT_BY_REGION[region] : undefined;
+  const purposes = [purposeMain, purposeSub].filter(Boolean) as string[];
 
   const bySort = (a: SeedPlace, b: SeedPlace) => {
     const aScore = a.purposes.some((pp) => purposes.includes(pp)) ? 1 : 0;
@@ -289,6 +309,208 @@ export function generateTrip(payload: TripRequestPayload): TripResponse {
     total_days: totalDays,
     days,
   };
+}
+
+// ── Course candidates (POST /api/trips/candidates/) ────────────────────────
+// Three variants (dist/pref/relax) generated from the same seed pool, mirroring
+// the backend's MODE_MULTIPLIER idea from constraints.py (dist=1.0, pref=0.9,
+// relax=0.7) without reimplementing the real beam search.
+
+const MODE_MULTIPLIER: Record<CoursePriority, number> = { dist: 1.0, pref: 0.9, relax: 0.7 };
+const MODE_LABEL: Record<CoursePriority, string> = {
+  dist: "동선 효율 추천",
+  pref: "취향 맞춤 추천",
+  relax: "여유로운 코스 추천",
+};
+const MODE_DESCRIPTION: Record<CoursePriority, string> = {
+  dist: "이동 거리가 짧고 장소 간 동선이 효율적으로 구성된 코스예요.",
+  pref: "선택한 여행 목적과 분위기에 가장 잘 맞는 장소들로 구성된 코스예요.",
+  relax: "장소 사이에 여유 시간을 더 두어 서두르지 않고 즐길 수 있는 코스예요.",
+};
+const MODE_SCORES: Record<CoursePriority, CandidateScores> = {
+  dist: { move_eff: 5, pref_fit: 4, slack: 3 },
+  pref: { move_eff: 3, pref_fit: 5, slack: 4 },
+  relax: { move_eff: 3, pref_fit: 4, slack: 5 },
+};
+const RELAX_BUFFER_MIN = 30;
+
+function purposeFilteredPool(payload: TripRequestPayload, dayIndex: number, excludeIds: Set<string>): SeedPlace[] {
+  const { region } = resolveDayConditions(payload, dayIndex);
+  const quadrant = region ? QUADRANT_BY_REGION[region] : undefined;
+  const excludeCategories = payload.exclude_categories ?? [];
+
+  return SEED_PLACES.filter((p) => !excludeIds.has(p.content_id))
+    .filter((p) => !quadrant || p.quadrant === quadrant)
+    .filter((p) => !p.category || !excludeCategories.includes(p.category));
+}
+
+function buildCandidateDay(
+  dayIndex: number,
+  dayCase: DayCase,
+  dayDate: Date,
+  payload: TripRequestPayload,
+  excludeIds: Set<string>,
+  mode: CoursePriority,
+): ItineraryDayDTO {
+  const { purposeMain, purposeSub } = resolveDayConditions(payload, dayIndex);
+  const purposes = [purposeMain, purposeSub].filter(Boolean) as string[];
+
+  const pool = purposeFilteredPool(payload, dayIndex, excludeIds);
+  const sorted =
+    mode === "dist"
+      ? [...pool] // no purpose re-sort — proxy for "closest first"
+      : [...pool].sort((a, b) => {
+          const aScore = a.purposes.some((pp) => purposes.includes(pp)) ? 1 : 0;
+          const bScore = b.purposes.some((pp) => purposes.includes(pp)) ? 1 : 0;
+          return bScore - aScore;
+        });
+
+  const availHours = dayCase === "D" ? 8 : dayCase === "B" ? 12 : 6.5;
+  const targetSlots = Math.max(0, Math.min(sorted.length, Math.round(7 * (availHours / 12) * MODE_MULTIPLIER[mode])));
+  const needLunch = dayCase !== "A";
+  const needDinner = true;
+
+  const chosen = sorted.slice(0, targetSlots);
+  let cursor = dayCase === "A" ? 15 * 60 : 9 * 60;
+  let filledLunch = false;
+  const buffer = mode === "relax" ? RELAX_BUFFER_MIN : 0;
+
+  const items: ItineraryItemDTO[] = chosen.map((place, idx) => {
+    const travel = (idx === 0 ? 0 : 15 + (idx % 3) * 5) + (idx === 0 ? 0 : buffer);
+    cursor += travel;
+    const arrive = cursor;
+    cursor += place.stayMin;
+    const depart = cursor;
+    const slotType = slotTypeFor(place, needLunch, needDinner, filledLunch);
+    if (slotType === "RESTAURANT" && !filledLunch) filledLunch = true;
+    excludeIds.add(place.content_id);
+
+    const { purposes: _p, stayMin: _s, category: _c, ...placeDto } = place;
+    return {
+      order: idx,
+      slot_type: slotType,
+      place: placeDto,
+      arrive_at: isoAt(dayDate, arrive),
+      depart_at: isoAt(dayDate, depart),
+      stay_min: place.stayMin,
+      travel_min_from_prev: idx === 0 ? null : travel,
+      hours_uncertain: false,
+      pref_score: 0.7,
+      adjusted_qual: (place.satisfaction_score ?? 4.0) / 5,
+    };
+  });
+
+  return {
+    day_index: dayIndex,
+    day_case: dayCase,
+    avail_hours: availHours,
+    target_slots: targetSlots,
+    need_lunch: needLunch,
+    need_dinner: needDinner,
+    need_night_spot: false,
+    lodging: null,
+    items,
+  };
+}
+
+function totalDaysFor(payload: TripRequestPayload): number {
+  const start = new Date(payload.start_datetime);
+  const end = new Date(payload.end_datetime);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.max(
+    1,
+    Math.round((new Date(end.toDateString()).getTime() - new Date(start.toDateString()).getTime()) / msPerDay) + 1,
+  );
+}
+
+function buildCandidate(payload: TripRequestPayload, mode: CoursePriority): TripCandidateDTO | null {
+  const totalDays = totalDaysFor(payload);
+  const start = new Date(payload.start_datetime);
+  const excludeIds = new Set<string>();
+  const days: ItineraryDayDTO[] = [];
+
+  for (let i = 1; i <= totalDays; i += 1) {
+    const dayCase = dayCaseFor(i, totalDays);
+    const dayDate = new Date(start.getFullYear(), start.getMonth(), start.getDate() + (i - 1));
+    days.push(buildCandidateDay(i, dayCase, dayDate, payload, excludeIds, mode));
+  }
+
+  const allItems = days.flatMap((d) => d.items);
+  if (allItems.length === 0) return null;
+
+  const totalStayMin = allItems.reduce((sum, it) => sum + it.stay_min, 0);
+  const totalTravelMin = allItems.reduce((sum, it) => sum + (it.travel_min_from_prev ?? 0), 0);
+  const totalAvailMin = days.reduce((sum, d) => sum + d.avail_hours * 60, 0);
+  const mealCount = allItems.filter((it) => it.slot_type !== "GENERAL").length;
+
+  const badges = [`식사 ${mealCount}회 포함`];
+  if (mode === "relax") badges.push("휴식 버퍼 포함");
+  if (mode === "dist") badges.push("이동 최소화");
+
+  return {
+    id: `cand-${mode}-${Date.now().toString(36)}-${Math.round(Math.random() * 1e4)}`,
+    mode,
+    label: MODE_LABEL[mode],
+    visit_count: allItems.length,
+    total_duration_min: totalStayMin + totalTravelMin,
+    total_distance_km: Math.round(totalTravelMin * 0.75),
+    slack_min: Math.max(0, Math.round(totalAvailMin - totalStayMin - totalTravelMin)),
+    scores: MODE_SCORES[mode],
+    description: MODE_DESCRIPTION[mode],
+    badges,
+    days,
+  };
+}
+
+export function generateCandidates(payload: TripRequestPayload): CandidatesResponse {
+  const modes: CoursePriority[] = ["dist", "pref", "relax"];
+  const candidates = modes
+    .map((mode) => buildCandidate(payload, mode))
+    .filter((c): c is TripCandidateDTO => c !== null);
+
+  return {
+    request_id: `req-${Date.now().toString(36)}-${Math.round(Math.random() * 1e4)}`,
+    candidates,
+  };
+}
+
+export function candidateToTrip(request: TripRequestPayload, candidate: TripCandidateDTO): TripResponse {
+  return {
+    id: nextTripId(),
+    created_at: new Date().toISOString(),
+    request,
+    total_days: candidate.days.length,
+    days: candidate.days,
+  };
+}
+
+// ── Place lookups used by the edit/chat handlers ───────────────────────────
+
+export interface ReplacementPick {
+  place: PlaceDTO;
+  stayMin: number;
+}
+
+export function pickReplacementPlace(excludeIds: Set<string>, quadrant?: Quadrant): ReplacementPick | null {
+  const inQuadrant = SEED_PLACES.find((p) => !excludeIds.has(p.content_id) && (!quadrant || p.quadrant === quadrant));
+  const candidate = inQuadrant ?? SEED_PLACES.find((p) => !excludeIds.has(p.content_id));
+  if (!candidate) return null;
+  const { purposes: _p, stayMin, category: _c, ...place } = candidate;
+  return { place, stayMin };
+}
+
+// ── Place search (GET /api/places/search) ──────────────────────────────────
+
+export function searchSeedPlaces(params: PlaceSearchParams): PlaceDTO[] {
+  const quadrant = params.region ? QUADRANT_BY_REGION[params.region] : undefined;
+  const q = params.q?.trim().toLowerCase();
+
+  return SEED_PLACES.filter((p) => {
+    if (quadrant && p.quadrant !== quadrant) return false;
+    if (params.category && p.content_type_name !== params.category) return false;
+    if (q && !p.title.toLowerCase().includes(q) && !p.address.toLowerCase().includes(q)) return false;
+    return true;
+  }).map(({ purposes: _p, stayMin: _s, category: _c, ...place }) => place);
 }
 
 // Fixed demo trip used by Home/List curated cards so they always show a

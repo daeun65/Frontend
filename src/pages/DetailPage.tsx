@@ -1,8 +1,13 @@
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTrip } from "../hooks/useTrip";
 import { PURPOSE_LABELS, REGION_LABELS } from "../api/types";
 import { dayDateLabel, hhmm, slotLabel } from "../utils/format";
-import type { ItineraryDayDTO } from "../api/types";
+import type { ItineraryDayDTO, PlaceDTO, TripResponse } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
+import { useSaveCourse } from "../hooks/useSaved";
+import Modal from "../components/Modal";
+import PlaceDetailSheet from "../components/PlaceDetailSheet";
 
 const STOP_ANGLES = [
   { x: 118, y: 0 },
@@ -34,6 +39,10 @@ export default function DetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: trip, isLoading, isError } = useTrip(id);
+  const { isAuthenticated } = useAuth();
+  const saveCourse = useSaveCourse();
+  const [selectedPlace, setSelectedPlace] = useState<PlaceDTO | null>(null);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
   if (isLoading) {
     return (
@@ -63,6 +72,20 @@ export default function DetailPage() {
   const regionText = trip.request.region_preference ? REGION_LABELS[trip.request.region_preference] : "제주 전역";
   const titleFirst = allItems[0]?.place.title ?? "";
   const titleLast = allItems[allItems.length - 1]?.place.title ?? "";
+  const courseTitle = titleLast && titleFirst !== titleLast ? `${titleFirst}에서 ${titleLast}까지` : titleFirst;
+
+  function handleSaveClick() {
+    if (!isAuthenticated) {
+      navigate("/login", { state: { from: `/trip/${id}` } });
+      return;
+    }
+    saveCourse.reset();
+    setShowSaveConfirm(true);
+  }
+
+  function confirmSave(t: TripResponse) {
+    saveCourse.mutate({ trip: t, title: courseTitle });
+  }
 
   return (
     <div>
@@ -94,15 +117,15 @@ export default function DetailPage() {
             {firstDay && <span className="meta-chip mono">🎯 목표 {firstDay.target_slots}곳/일</span>}
           </div>
           <div className="actions">
-            <a className="btn-primary" href="#">
+            <button type="button" className="btn-primary" onClick={handleSaveClick}>
               이 코스 저장하기
-            </a>
-            <a className="btn-outline" href="#">
+            </button>
+            <Link className="btn-outline" to={`/trip/${id}/map`}>
               지도에서 열기
-            </a>
-            <a className="btn-outline" href="#">
-              공유하기
-            </a>
+            </Link>
+            <Link className="btn-outline" to={`/trip/${id}/edit`}>
+              코스 편집
+            </Link>
           </div>
         </div>
         <div>
@@ -169,7 +192,12 @@ export default function DetailPage() {
                 {day.items.map((item, idx) => (
                   <div className="tl-item" key={item.order}>
                     <div className="tl-dot mono">{hhmm(item.arrive_at)}</div>
-                    <div className="tl-card">
+                    <div
+                      className="tl-card"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedPlace(item.place)}
+                    >
                       <div className="tl-top">
                         <div className="tl-title">
                           {item.place.title}
@@ -199,12 +227,14 @@ export default function DetailPage() {
         <aside>
           <div className="side-card">
             <h4>코스 지도</h4>
-            <div className="map-placeholder">
-              {allItems.slice(0, 8).map((item, i) => (
-                <div className="map-pin" key={item.place.content_id} style={PIN_POSITIONS[i]} />
-              ))}
-            </div>
-            <div className="side-note">{allItems.length}개 스팟, 실제 지도 연동은 준비 중이에요.</div>
+            <Link to={`/trip/${id}/map`} style={{ display: "block" }}>
+              <div className="map-placeholder">
+                {allItems.slice(0, 8).map((item, i) => (
+                  <div className="map-pin" key={item.place.content_id} style={PIN_POSITIONS[i]} />
+                ))}
+              </div>
+            </Link>
+            <div className="side-note">{allItems.length}개 스팟 · <Link to={`/trip/${id}/map`}>전체 지도 보기 →</Link></div>
           </div>
           <div className="side-card">
             <h4>함께 보면 좋은 코스</h4>
@@ -227,13 +257,56 @@ export default function DetailPage() {
       </div>
 
       <div className="sticky-actions">
-        <a className="btn-outline" href="#">
+        <Link className="btn-outline" to={`/trip/${id}/map`}>
           지도에서 열기
-        </a>
-        <a className="btn-primary" href="#">
+        </Link>
+        <button type="button" className="btn-primary" onClick={handleSaveClick}>
           이 코스 저장하기
-        </a>
+        </button>
       </div>
+
+      {selectedPlace && <PlaceDetailSheet place={selectedPlace} onClose={() => setSelectedPlace(null)} />}
+
+      {showSaveConfirm && (
+        <Modal title="코스를 저장하시겠습니까?" onClose={() => setShowSaveConfirm(false)}>
+          <p style={{ marginBottom: 20 }}>저장한 코스는 저장 목록에서 다시 열 수 있습니다.</p>
+          {saveCourse.isError && (
+            <div className="form-error" style={{ marginBottom: 14 }}>
+              저장에 실패했어요. 다시 시도해주세요.
+            </div>
+          )}
+          {saveCourse.isSuccess ? (
+            <div style={{ display: "flex", gap: 10 }}>
+              <Link className="btn-outline" to="/saved" style={{ flex: 1, textAlign: "center" }}>
+                저장 목록에서 확인
+              </Link>
+              <button type="button" className="btn-primary" style={{ flex: 1 }} onClick={() => setShowSaveConfirm(false)}>
+                닫기
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                className="btn-outline"
+                style={{ flex: 1 }}
+                onClick={() => setShowSaveConfirm(false)}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ flex: 1 }}
+                onClick={() => confirmSave(trip)}
+                disabled={saveCourse.isPending}
+              >
+                {saveCourse.isPending ? "저장 중…" : "저장"}
+              </button>
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }
